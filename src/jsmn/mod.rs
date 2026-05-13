@@ -1,3 +1,5 @@
+
+#[derive(PartialEq)]
 pub enum JsmnType {
     JsmnUndefined   = 0,
     JsmnObject      = 1 << 0,
@@ -90,19 +92,11 @@ pub fn jsmn_parse_primitive<'life_of_parser, 'life_of_tokens>(
     // let mut found = false;
     while parser.pos < len && js.get(parser.pos as usize) != Some(&b'\0') {
         match js[parser.pos] {
-            b':'    => {},
-            b'\t'   => {}, 
-            b'\r'   => {},
-            b'\n'   => {}, 
-            b' '    => {},
-            b','    => {},
-            b']'    => {},
-            b'}'    =>  { 
+            // strict mode: b':'
+            b'\t' | b'\r' | b'\n' | b' ' | b',' | b']' | b'}' =>  { 
                 break;
             },
-            _       =>  {
-                break;
-            }
+            _       =>  {}
         }
 
         if js.get(parser.pos) < Some(&32) || js.get(parser.pos) >= Some(&127) {
@@ -199,13 +193,12 @@ pub fn jsmn_parse_string(parser: &mut JsmnParser, js: &[u8],
 
           match js.get(parser.pos).unwrap() {
             /* Allowed escaped symbols */
-            b'\"' |  b'/' | b'\\' | b'b' | b'f' | b'r' | b'n'   => {},    
-            b't'                                                => { break; },
-            b'u'                                                => {
+            b'\"' |  b'/' | b'\\' | b'b' | b'f' | b'r' | b'n' | b't'    => { },
+            b'u'                                                        => {
                 parser.pos += 1;
                 for _ in 0..4 {
                     if parser.pos >= len || *js.get(parser.pos).unwrap() == b'\0' {
-                        break;
+                        break; 
                     }
                     /* If it isn't a hex character we have an error */
                     if !((*js.get(parser.pos).unwrap() >= 48 && *js.get(parser.pos).unwrap() <= 57) ||   /* 0-9 */
@@ -217,10 +210,9 @@ pub fn jsmn_parse_string(parser: &mut JsmnParser, js: &[u8],
                     parser.pos += 1;
                 } 
                 parser.pos -= 1;
-                break;
             }
             /* Unexpected symbol */
-            _                                                   => {
+            _                                                           => {
                 parser.pos = start;
                 return Err(JsmnError::JsmnErrorPart)
             } 
@@ -231,4 +223,114 @@ pub fn jsmn_parse_string(parser: &mut JsmnParser, js: &[u8],
     parser.pos = start;
     
     return Err(JsmnError::JsmnErrorPart);
+}
+
+pub fn jsmn_parse(parser: &mut JsmnParser, js: &[u8],
+    len: usize, tokens: &mut Vec<JsmnTok>, num_tokens: usize) -> Result<(), JsmnError> {
+    let mut count = parser.tok_next;
+    let mut i = 0 as isize;
+
+    while parser.pos < len && js.get(parser.pos).unwrap() != &b'\0' {
+        
+        let c= js[parser.pos]; 
+        match c {
+            b'{' | b'[' => 'this_branch: {
+                count += 1;
+
+                if tokens.len() == 0 {
+                    // exit out of this match branch
+                    break 'this_branch;
+                }
+
+                if let Some(token) = jsmn_alloc_token(parser, tokens, num_tokens) {
+                    token.jsmn_type = match c {
+                        b'{' => JsmnType::JsmnObject,
+                        b'[' => JsmnType::JsmnArray,
+                        _    => JsmnType::JsmnUndefined
+                    };
+
+                    token.start = parser.pos as isize;
+                    token.size = parser.tok_next + 1;
+
+                    if parser.tok_super != -1 {
+                        let t = &mut tokens[parser.tok_super as usize];
+                    
+                        /*
+                         * 
+                         * #ifdef JSMN_STRICT
+                         * if (t.type == JsmnType::JsmnObject) {
+                         *  return Err(JsmnError::JsmnErrorInval);
+                         * }
+                         * #endif
+                         * */
+                        t.size += 1;
+                        
+                        /*
+                         * #ifdef JSMN_PARENT_LINKS
+                         * token.parent = parent.tok_super;
+                         * #endif
+                         * */
+                    }
+                    
+                    parser.tok_super = parser.tok_next  as isize - 1;
+                } else {
+                    return Err(JsmnError::JsmnErrorNoMem);
+                }
+            },
+            b'}' | b']' => 'this_branch: {
+                if tokens.len() == 0 {
+                    break 'this_branch;
+                }
+
+                // #ifdef PARENT_LINKS
+                /* 
+                if parser.tok_next < 1 {
+                    return Err(JsmnError::JsmnErrorInval);
+                }
+            
+                let mut token = &mut tokens[parser.tok_next - 1];
+                let c_type=  match c {
+                    b'}' => JsmnType::JsmnObject,
+                    b']' => JsmnType::JsmnArray,
+                    _    => JsmnType::JsmnUndefined
+                };
+
+                loop {
+                    if token.start != -1 && token.end != -1 {
+                        if token.jsmn_type != c_type {
+                            return Err(JsmnError::JsmnErrorInval); 
+                        } 
+                        token.end = parser.pos as isize + 1;
+                        parser.tok_super = token.parent;
+                        break;
+                    }
+
+                    if token.parent != -1 {
+                        if token.jsmn_type != c_type || parser.tok_super == -1 {
+                            return Err(JsmnError::JsmnErrorInval);
+                        }
+                        break;
+                    }
+                    
+                    let idx = token.parent as usize;
+                    token = &mut tokens[idx];
+                }
+                */
+            
+                // #else for previous ifdef 
+                i = parser.tok_next as isize - 1;
+                while i >= 0 {
+                    let token = &mut tokens[i as usize];
+                    unimplemented!(); 
+                    i -= 1;
+                }
+                    
+            },
+            _           => {}
+        }
+        
+        parser.pos += 1;
+    }
+
+    Ok(())
 }
